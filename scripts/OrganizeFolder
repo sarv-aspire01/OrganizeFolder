@@ -1,0 +1,161 @@
+#!/bin/bash
+##  created by https://github.com/sarv-aspire01
+TARGET_DIR="${1:-$(pwd)}"
+[[ ! -d "$TARGET_DIR" ]] && {
+    zenity --error --text="❌ Invalid directory!"
+    exit 1
+}
+
+cd "$TARGET_DIR" || exit 1
+
+LOG_DIR="$HOME/.local/share/folder_organizer/.folder_organizer_logs"
+UNDO_DIR="$HOME/.local/share/folder_organizer/.folder_organizer_undo"
+mkdir -p "$LOG_DIR" "$UNDO_DIR"
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="$LOG_DIR/organize_$TIMESTAMP.log"
+UNDO_FILE="$UNDO_DIR/undo_$TIMESTAMP.txt"
+
+prompt_folder_name() {
+    local group="$1"
+    local existing_folders
+    existing_folders=$(find . -mindepth 1 -maxdepth 1 -type d | sed 's|^\./||' | sort | tr '\n' '|')
+    local default_name="$group"
+
+    local selection
+    selection=$(zenity --forms \
+        --title="📂 Folder for '$group'" \
+        --text="Select existing or enter new folder name:" \
+        --separator="|" \
+        --add-combo="Select existing folder" --combo-values="$existing_folders" \
+        --add-entry="Or enter new folder name" \
+        --width=400 --height=300)
+
+    [[ -z "$selection" ]] && echo "" && return
+
+    chosen=$(echo "$selection" | cut -d'|' -f1)
+    typed=$(echo "$selection" | cut -d'|' -f2)
+
+    echo "${typed:-$chosen}"
+}
+
+# Undo last operation
+undo_last() {
+    last_undo=$(ls -t "$UNDO_DIR"/*.txt 2>/dev/null | head -n1)
+    [[ -z "$last_undo" ]] && {
+        zenity --info --text="⚠️ No previous session found to undo."
+        exit 0
+    }
+
+    while IFS="|" read -r src dst; do
+        [[ -f "$dst" ]] && mv -n "$dst" "$src"
+    done < "$last_undo"
+
+    zenity --info --text="✅ Undo complete. Files restored."
+}
+
+# Show log
+view_log() {
+    last_log=$(ls -t "$LOG_DIR"/organize_*.log 2>/dev/null | head -n1)
+    [[ -z "$last_log" ]] && {
+        zenity --info --text="📭 No log file found."
+        exit 0
+    }
+    ${VISUAL:-gedit} "$last_log" || xdg-open "$last_log"
+}
+
+group_files() {
+    local type="$1"
+    declare -A GROUPED
+
+    while IFS= read -r file; do
+        [[ -f "$file" ]] || continue
+        base=$(basename "$file")
+
+        case "$type" in
+            "prefix") key=$(echo "$base" | awk -F'[_\-]' '{print $1}') ;;
+            "type") key=$(echo "$base" | awk -F. '{if (NF>1) print $NF; else print "no_ext"}') ;;
+            "date") key=$(date -r "$file" +%Y-%m) ;;
+            "size")
+                size=$(stat -c%s "$file")
+                if (( size < 1_000_000 )); then key="Small"
+                elif (( size <= 50_000_000 )); then key="Medium"
+                else key="Large"; fi ;;
+        esac
+
+        [[ -z "$key" ]] && continue
+        GROUPED["$key"]+="$file"$'\n'
+    done < <(find . -maxdepth 1 -type f)
+
+    # Build preview
+    preview=""
+    for key in "${!GROUPED[@]}"; do
+        count=$(echo "${GROUPED[$key]}" | grep -c .)
+        [[ "$count" -eq 0 || -z "$key" ]] && continue
+        preview+="📁 $key ($count files)\n"
+    done
+
+    zenity --text-info --title="📋 Preview" --width=500 --height=400 \
+        --filename=<(echo -e "$preview") || exit 0
+
+    zenity --question --text="✅ Proceed with organizing the files?"
+    [[ $? -ne 0 ]] && exit 0
+
+    for key in "${!GROUPED[@]}"; do
+        count=$(echo "${GROUPED[$key]}" | grep -c .)
+        [[ "$count" -eq 0 || -z "$key" ]] && continue
+
+        folder_name=$(prompt_folder_name "$key")
+        [[ -z "$folder_name" ]] && continue
+
+        mkdir -p "$folder_name"
+        while IFS= read -r file; do
+            [[ -f "$file" ]] || continue
+            orig_path="$(realpath "$file")"
+            new_path="$(realpath "$folder_name")/$(basename "$file")"
+            echo "$orig_path|$new_path" >> "$UNDO_FILE"
+            echo "Moved: $orig_path → $new_path" >> "$LOG_FILE"
+            mv -n "$file" "$folder_name/"
+        done <<< "${GROUPED[$key]}"
+    done
+
+    zenity --info --text="✅ Organization complete. Log saved."
+}
+
+# Auto-suggest preview only
+auto_preview_only() {
+    preview=$(find . -maxdepth 1 -type f | sed 's|^\./||' | \
+        awk -F'[_\-]' '{print $1}' | grep -v '^$' | sort | uniq -c | sort -nr | head -10)
+
+    result="🧠 Top common filename prefixes:\n\n"
+    result+=$(echo "$preview" | awk '{printf "%s files start with: %s\n", $1, $2}')
+
+    zenity --info --width=500 --text="$result" || exit 0
+
+    zenity --question --text="Would you like to organize based on these prefixes?"
+    [[ $? -ne 0 ]] && exit 0
+
+    group_files "prefix"
+}
+
+# Menu
+choice=$(zenity --list --title="🛠️ Folder Organizer Tool" \
+  --text="Choose an action for:\n$TARGET_DIR" \
+  --radiolist --column="✓" --column="Action" \
+  TRUE "🧠 Auto-Suggest (Filename Prefix)" \
+  FALSE "🔠 Organize by File Type" \
+  FALSE "🕒 Organize by Date (Modified)" \
+  FALSE "📏 Organize by File Size" \
+  FALSE "↩️ Undo Last Change" \
+  FALSE "📜 View Log")
+
+[[ -z "$choice" ]] && exit 0
+
+case "$choice" in
+    *Prefix*) auto_preview_only ;;
+    *Type*) group_files "type" ;;
+    *Date*) group_files "date" ;;
+    *Size*) group_files "size" ;;
+    *Undo*) undo_last ;;
+    *Log*) view_log ;;
+esac
