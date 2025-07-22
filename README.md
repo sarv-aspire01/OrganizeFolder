@@ -31,11 +31,19 @@ Install with:
       > 📏 Organize by Size (by size small, medium, large)
       > ↩️ Undo Last Change (uses the log timestamp to undo the last operation)
       > 📜 View Log (it shows the last changelog however all log will be saved in log folder)
->  view a preview >> confirm to organize
+<img src="assets/OrganizeFolder1.png" width="500"/>
 
->  folder selection (reuse existing or create new)
+> **view a preview >> confirm to organize**
 
->  organize📂
+<img src="assets/organizeFolder2.png" width="500"/>
+
+> **folder selection (reuse existing or create new)**
+
+<img src="assets/organizeFolder3.png" width="500"/>
+
+>  **organize📂**
+> 
+<img src="assets/organizeFolder4.png" width="500"/>
 
 **Logging**
 
